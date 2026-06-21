@@ -125,6 +125,43 @@ class TestFriendlyNeighborSDK(unittest.TestCase):
         # Distance calculation: 0.9^2 + (0.1-1.0)^2 + 0 = 0.81 + 0.81 = 1.62
         self.assertAlmostEqual(results[1]["distance"], 1.62, places=5)
 
+    def test_query_with_metadata_filter(self):
+        col = self.client.create_collection("filter_col", dimensions=3)
+
+        ids = ["v1", "v2", "v3", "v4"]
+        embeddings = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.1, 0.0, 0.0]
+        ]
+        metadatas = [
+            {"category": "A", "status": "active"},
+            {"category": "B", "status": "active"},
+            {"category": "A", "status": "inactive"},
+            {"category": "A", "status": "active"}
+        ]
+        col.insert_many(ids, embeddings, metadatas)
+
+        # 1. Query with single filter condition: category == "A"
+        results = col.query(vector=[1.0, 0.0, 0.0], limit=10, filter={"category": "A"})
+        # Should return v1, v4, v3 (ordered by distance)
+        self.assertEqual(len(results), 3)
+        self.assertEqual(results[0]["id"], "v1")
+        self.assertEqual(results[1]["id"], "v4")
+        self.assertEqual(results[2]["id"], "v3")
+
+        # 2. Query with multiple filter conditions: category == "A" AND status == "active"
+        results = col.query(vector=[1.0, 0.0, 0.0], limit=10, filter={"category": "A", "status": "active"})
+        # Should return v1, v4
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["id"], "v1")
+        self.assertEqual(results[1]["id"], "v4")
+
+        # 3. Query with filter returning no results
+        results = col.query(vector=[1.0, 0.0, 0.0], limit=10, filter={"category": "C"})
+        self.assertEqual(len(results), 0)
+
     def test_dimension_validation(self):
         col = self.client.create_collection("val_col", dimensions=4)
 
