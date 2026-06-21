@@ -55,17 +55,28 @@ class Collection:
                 data
             )
 
-    def query(self, vector: List[float], limit: int = 10) -> List[Dict[str, Any]]:
+    def query(self, vector: List[float], limit: int = 10, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Query the collection for the nearest neighbors of the given vector."""
         if len(vector) != self.dimensions:
             raise ValueError(f"Query vector dimension {len(vector)} does not match collection dimension {self.dimensions}")
 
         query_blob = pack_vector(vector)
+        query_str = f"SELECT id, embedding, metadata, l2_distance(embedding, ?) AS distance FROM {self.table_name}"
+        params = [query_blob]
+
+        if filter:
+            filter_clauses = []
+            for key, value in filter.items():
+                filter_clauses.append(f"json_extract(metadata, '$.{key}') = ?")
+                params.append(str(value))
+
+            query_str += " WHERE " + " AND ".join(filter_clauses)
+
+        query_str += " ORDER BY distance ASC LIMIT ?"
+        params.append(limit)
+            
         cursor = self.client.conn.cursor()
-        cursor.execute(
-            f"SELECT id, embedding, metadata, l2_distance(embedding, ?) AS distance FROM {self.table_name} ORDER BY distance ASC LIMIT ?",
-            (query_blob, limit)
-        )
+        cursor.execute(query_str, tuple(params))
         
         results = []
         for row in cursor.fetchall():
