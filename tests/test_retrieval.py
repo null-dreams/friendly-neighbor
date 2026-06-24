@@ -31,7 +31,7 @@ class TestVectorRetrieval(unittest.TestCase):
     def setUp(self):
         # Create a fresh table for each test
         self.conn.execute("DROP TABLE IF EXISTS vectors")
-        self.conn.execute("CREATE TABLE vectors (id INTEGER PRIMARY KEY, embedding BLOB)")
+        self.conn.execute("CREATE TABLE vectors (id INTEGER PRIMARY KEY, embedding BLOB, metadata TEXT)")
 
     def test_basic_knn_retrieval(self):
         # Populate table with some reference vectors (3-dimensional)
@@ -171,6 +171,81 @@ class TestVectorRetrieval(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError) as ctx:
             self.conn.execute("SELECT id, l2_distance(embedding, ?) FROM vectors", (query_blob,)).fetchall()
         self.assertIn("BLOBs must be of equal length", str(ctx.exception))
+
+    def test_metadata_filtering(self):
+        import json
+        # Populate table with vectors (3-dimensional) and JSON metadata
+        # One vector has NULL metadata to test null handling
+        vectors = [
+            (1, [1.0, 0.0, 0.0], {"category": "A", "status": "active", "priority": 1}),
+            (2, [0.0, 1.0, 0.0], {"category": "B", "status": "active", "priority": 2}),
+            (3, [0.0, 0.0, 1.0], {"category": "A", "status": "inactive", "priority": 1}),
+            (4, [1.1, 0.0, 0.0], {"category": "A", "status": "active", "priority": 3}),
+            (5, [0.0, 0.0, 0.0], None)
+        ]
+        
+        for vid, vec, meta in vectors:
+            meta_val = json.dumps(meta) if meta is not None else None
+            self.conn.execute(
+                "INSERT INTO vectors (id, embedding, metadata) VALUES (?, ?, ?)",
+                (vid, pack_vector(vec), meta_val)
+            )
+        self.conn.commit()
+
+        query_blob = pack_vector([1.0, 0.0, 0.0])
+
+        # 1. Test filtering by single key
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, l2_distance(embedding, ?) AS dist FROM vectors "
+            "WHERE json_extract(metadata, '$.category') = ? "
+            "ORDER BY dist ASC",
+            (query_blob, "A")
+        )
+        results = cursor.fetchall()
+        # Should return IDs: 1 (dist=0.0), 4 (dist=0.01), 3 (dist=2.0)
+        self.assertEqual(len(results), 3)
+        self.assertEqual(results[0][0], 1)
+        self.assertEqual(results[1][0], 4)
+        self.assertEqual(results[2][0], 3)
+        self.assertAlmostEqual(results[0][1], 0.0)
+        self.assertAlmostEqual(results[1][1], 0.01)
+        self.assertAlmostEqual(results[2][1], 2.0)
+
+        # 2. Test filtering by multiple keys using AND
+        cursor.execute(
+            "SELECT id, l2_distance(embedding, ?) AS dist FROM vectors "
+            "WHERE json_extract(metadata, '$.category') = ? AND json_extract(metadata, '$.status') = ? "
+            "ORDER BY dist ASC",
+            (query_blob, "A", "active")
+        )
+        results = cursor.fetchall()
+        # Should return IDs: 1 (dist=0.0), 4 (dist=0.01)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0][0], 1)
+        self.assertEqual(results[1][0], 4)
+
+        # 3. Test filtering with integer values
+        cursor.execute(
+            "SELECT id, l2_distance(embedding, ?) AS dist FROM vectors "
+            "WHERE json_extract(metadata, '$.priority') = ? "
+            "ORDER BY dist ASC",
+            (query_blob, 1)
+        )
+        results = cursor.fetchall()
+        # Should return IDs: 1 (dist=0.0), 3 (dist=2.0)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0][0], 1)
+        self.assertEqual(results[1][0], 3)
+
+        # 4. Test filtering with no matches
+        cursor.execute(
+            "SELECT id FROM vectors "
+            "WHERE json_extract(metadata, '$.category') = ?",
+            ("C",)
+        )
+        results = cursor.fetchall()
+        self.assertEqual(len(results), 0)
 
 if __name__ == "__main__":
     unittest.main()
