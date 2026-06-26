@@ -20,3 +20,20 @@ target_include_directories(friendly_neighbor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 set_target_properties(friendly_neighbor PROPERTIES PREFIX "")
+
+add_executable(engine_benchmark 
+    src/benchmark.cpp
+    src/distance.cpp
+)
+
+find_library(SQLITE3_LIBRARY NAMES sqlite3 sqlite)
+if(SQLITE3_LIBRARY)
+    target_link_libraries(engine_benchmark PRIVATE ${SQLITE3_LIBRARY})
+else()
+    message(FATAL_ERROR "Could not find sqlite3 library to link benchmark.")
+endif()
+
+target_include_directories(engine_benchmark PRIVATE 
+    ${SQLITE3_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
